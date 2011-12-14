@@ -18,6 +18,16 @@ my $random_string = sub {
 
 my $code = sub {
     my ($chunks, $cb) = @_;
+
+    my $context = STF::Context->bootstrap( config => "t/config.pl" ) ;
+    my @counter_keys = qw(get_object delete_object create_bucket modify_object);
+    if (STF::Dispatcher::PSGI::STF_DISPATCHER_COUNTER()) {
+        my $memd = $context->container->get('Memcached');
+        foreach my $counter_key ( @counter_keys ) {
+            $memd->set( "stf.counter.$counter_key", 0 );
+        }
+    }
+
     my $res;
     my $bucket_name = $random_string->();
     my $object_name = $random_string->();
@@ -57,8 +67,6 @@ my $code = sub {
     if (! ok $res->is_success, "object creation request was successful") {
         diag $res->as_string;
     }
-
-    my $context = STF::Context->bootstrap( config => "t/config.pl" ) ;
 
     { # find object ID and such
         my $guard = $context->container->new_scope();
@@ -282,6 +290,23 @@ EOSQL
         is $e_count, 0, "there are exactly 0 buckets (should now be deleted)";
     }
 
+
+    if (STF::Dispatcher::PSGI::STF_DISPATCHER_COUNTER()) {
+        my $memd = $context->container->get('Memcached');
+        my %expected = (
+            get_object => 19,
+            modify_object => 1,
+            delete_object => 2,
+            create_bucket => 1,
+        );
+        foreach my $counter_key ( @counter_keys ) {
+            my $got = $memd->get("stf.counter.$counter_key");
+            my $expected = $expected{$counter_key} || 0;
+
+            is $got, $expected, "counter $counter_key expected $expected, got $got"
+        }
+    }
+
 };
 
 my $app = require "t/dispatcher.psgi";
@@ -295,6 +320,7 @@ foreach my $impl ( qw(MockHTTP Server) ) {
             app => $app,
             client => sub { $code->($chunk, @_) }
         ;
+
     }
 }
 

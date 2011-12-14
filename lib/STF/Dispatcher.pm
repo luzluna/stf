@@ -39,13 +39,20 @@ sub bootstrap {
     my $class = shift;
     my $context = STF::Context->bootstrap;
     my $config = $context->config;
+    my $container = $context->container;
 
     $class->new(
+        cache => $container->get('Memcached'),
         cache_expires => 300,
         %{$config->{'Dispatcher'}},
-        container => $context->container,
+        container => $container,
         context   => $context,
     );
+}
+
+sub count {
+    my ($self, $name) = @_;
+    $self->cache->incr( "stf.counter.$name" );
 }
 
 sub new {
