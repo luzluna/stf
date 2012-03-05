@@ -1,5 +1,4 @@
 # Watches for requests to reload the configuration for the workers
-# 
 
 package STF::Worker::ReloadConfig;
 use strict;
@@ -27,16 +26,21 @@ sub new {
 sub register {
     my $self = shift;
 
-    my $id = $self->id();
-    if (! $id ) {
-        $id = $self->generator->create_id();
-        $self->id( $id );
-    }
-    
     my $dbh = $self->get('DB::Master');
-    $dbh->do( <<EOSQL, undef, $id );
-        REPLACE INTO worker (id, expires_at) VALUES ( ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE) )
+    my $id = $self->id() ||$self->generator->create_id();
+
+    my $rv;
+    do {
+        local $dbh->{RaiseError} = 0;
+        $rv = $dbh->do( <<EOSQL, undef, $id );
+            INSERT INTO worker (id, expires_at) VALUES ( ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE) )
 EOSQL
+        if ($rv) {
+            $self->id ( $id );
+        } else {
+            $id = $self->generator->create_id();
+        }
+    } while( ! $rv);
 }
 
 sub unregister {
@@ -70,6 +74,10 @@ sub on_exit {
 sub work_once {
     my ($self, $worker_id) = @_;
 
+    if (STF_DEBUG) {
+        printf STDERR "[    Reload] Received reload request. Sending parent (%d) HUP\n",
+            $self->parent_pid;
+    }
     kill HUP => $self->parent_pid;
 }
 

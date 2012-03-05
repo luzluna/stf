@@ -6,12 +6,14 @@ use File::Temp qw(tempdir);
 use Getopt::Long ();
 use Parallel::Prefork;
 use Parallel::Scoreboard;
+use STF::Constants qw( STF_DEBUG );
 use STF::Context;
 use STF::SerialGenerator;
 use Class::Accessor::Lite
     rw => [ qw(
         context
         generator
+        id
         pid
         pid_file
         process_manager
@@ -57,11 +59,23 @@ sub new {
         },
         %args,
         pid => $$,
-        generator => STF::SerialGenerator->new(
-            id => $ENV{ WORKER_ID } || 1,
-        ),
     }, $class;
 
+    if (! $self->id) {
+        print STDERR "[    Drone] No worker ID specified. '1' will be used. Note that this MAY collide with other workers, and your config may be reloaded unexpectedly\n";
+        $self->id( 1 );
+    }
+
+    # This generator is used to generate an instance-ID. We may share the
+    # same worker ID (so we can reload configurations all at once) but we
+    # have to have a unique ID for all instances
+    if (! $self->generator) {
+        $self->generator(
+             STF::SerialGenerator->new( id => $self->id )
+        );
+    }
+
+    # Backwards compatibility
     my %alias = (
         Usage => 'UpdateUsage',
         Retire => 'RetireStorage',
@@ -77,20 +91,44 @@ sub new {
     # This MUST exist. Always
     $workers->{ReloadConfig} = 1;
 
+    # This is for compatibility measure. If we had an old type worker that has 
+    # the configuration in the config file, we want to send that over to
+    # the server. But only do that when the equivalent setting does not exist
+    # in the server's database
+    # XXX We probably should eliminate this in the future
+    $self->set_defaults_from_local_settings();
+
     return $self;
+}
+
+sub set_defaults_from_local_settings {
+    my $self = shift;
+
+    my $dbh = $self->context->container->get('DB::Master');
+    my $workers = $self->workers;
+    while ( my ($name, $instances) = each %$workers ) {
+        my $key = sprintf "stf.worker.%s.%s.instances",
+            $self->id,
+            $name
+        ;
+        $dbh->do( <<EOSQL, undef, $key, $instances );
+            INSERT IGNORE INTO config (varname, varvalue) VALUES (?, ?)
+EOSQL
+    }   
 }
 
 sub load_config {
     my $self = shift;
 
     my $dbh = $self->context->container->get('DB::Master');
-    my $config = $dbh->selectall_arrayref( <<EOM, { Slice => {} }, "stf.worker.%.instances" );
+    my $key = sprintf "stf.worker.%s.%%.instances", $self->id;
+    my $config = $dbh->selectall_arrayref( <<EOM, { Slice => {} }, $key);
         SELECT * FROM config WHERE varname LIKE ?
 EOM
     my $workers = $self->workers;
     foreach my $row ( @$config ) {
         my $klass = $row->{varname};
-        if ( $klass =~ s/^stf\.worker\.([^.]+)\.instances/$1/ ) {
+        if ( $klass =~ s/^stf\.worker\.[^\.]+\.([^\.]+)\.instances/$1/ ) {
             $workers->{$klass} = $row->{varvalue};
         }
     }
@@ -179,7 +217,9 @@ sub run {
 
         if ( $signal eq 'HUP' ) {
             # Tell everybody to restart
-            print STDERR "[    Drone] Received HUP, going to stop child processes, and reload configuration\n";
+            if ( STF_DEBUG ) {
+                print STDERR "[     Drone] Received HUP, going to stop child processes, and reload configuration\n";
+            }
 
             $self->load_config();
             $pp->signal_all_children( "TERM" );
@@ -210,7 +250,9 @@ sub start_worker {
     Class::Load::load_class($klass)
         if ! Class::Load::is_class_loaded($klass);
 
-    print STDERR "[     Drone] Spawning $klass ($$)\n";
+    if ( STF_DEBUG ) {
+        print STDERR "[     Drone] Spawning $klass ($$)\n";
+    }
 
     my ($config_key) = ($klass =~ /(Worker::[\w:]+)$/);
     my $container = $self->context->container;

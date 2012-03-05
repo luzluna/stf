@@ -58,7 +58,7 @@ EOM
     ok @$list; # XXX BAD TEST
 
     # Set the config value
-    $dbh->do( <<EOM, undef, "stf.worker.Replicate.instances", 1 );
+    $dbh->do( <<EOM, undef, "stf.worker.1.Replicate.instances", 1 );
         REPLACE INTO config (varname, varvalue) VALUES (?, ?)
 EOM
 
