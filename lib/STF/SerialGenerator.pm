@@ -183,5 +183,10 @@ sub cleanup {
     }
 }
 
+sub DESTROY {
+    my $self = shift;
+    local $@;
+    eval { $self->cleanup };
+}
 
 1;
