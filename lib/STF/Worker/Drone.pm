@@ -7,9 +7,12 @@ use Getopt::Long ();
 use Parallel::Prefork;
 use Parallel::Scoreboard;
 use STF::Context;
+use STF::SerialGenerator;
 use Class::Accessor::Lite
     rw => [ qw(
         context
+        generator
+        pid
         pid_file
         process_manager
         scoreboard
@@ -53,6 +56,10 @@ sub new {
             RetireStorage => 1,
         },
         %args,
+        pid => $$,
+        generator => STF::SerialGenerator->new(
+            id => $ENV{ WORKER_ID } || 1,
+        ),
     }, $class;
 
     my %alias = (
@@ -67,7 +74,31 @@ sub new {
         }
     }
 
+    # This MUST exist. Always
+    $workers->{ReloadConfig} = 1;
+
     return $self;
+}
+
+sub load_config {
+    my $self = shift;
+
+    my $dbh = $self->context->container->get('DB::Master');
+    my $config = $dbh->selectall_arrayref( <<EOM, { Slice => {} }, "stf.worker.%.instances" );
+        SELECT * FROM config WHERE varname LIKE ?
+EOM
+    my $workers = $self->workers;
+    foreach my $row ( @$config ) {
+        my $klass = $row->{varname};
+        if ( $klass =~ s/^stf\.worker\.([^.]+)\.instances/$1/ ) {
+            $workers->{$klass} = $row->{varvalue};
+        }
+    }
+    # This MUST exist. Always
+    $workers->{ReloadConfig} = 1;
+
+    my $pp = $self->process_manager();
+    $pp->max_workers( $self->max_workers );
 }
 
 sub max_workers {
@@ -117,6 +148,7 @@ sub prepare {
         my $pp = Parallel::Prefork->new({
             max_workers     => $self->max_workers,
             spawn_interval  => $self->spawn_interval,
+            after_fork      => sub { sleep 1 }, # XXX hmm?
             trap_signals    => {
                 map { ($_ => 'TERM') } qw(TERM INT HUP)
             }
@@ -138,16 +170,30 @@ sub run {
     $self->prepare;
 
     my $pp = $self->process_manager();
-    while ( $pp->signal_received !~ /^(?:TERM|INT)$/ ) {
-        $pp->start and next;
-        eval {
-            $self->start_worker( $self->get_worker );
-        };
-        if ($@) {
-            warn "Failed to start worker ($$): $@";
+    while ( 1 ) {
+        my $signal = $pp->signal_received;
+        if ( $signal =~ /^(?:TERM|INT)$/ ) {
+            # TERM or INT, then it's THE END
+            last;
         }
-        print STDERR "Worker ($$) exit\n";
-        $pp->finish;
+
+        if ( $signal eq 'HUP' ) {
+            # Tell everybody to restart
+            print STDERR "[    Drone] Received HUP, going to stop child processes, and reload configuration\n";
+
+            $self->load_config();
+            $pp->signal_all_children( "TERM" );
+        }
+
+        $pp->start(sub {
+            eval {
+                $self->start_worker( $self->get_worker );
+            };
+            if ($@) {
+                warn "Failed to start worker ($$): $@";
+            }
+            print STDERR "Worker ($$) exit\n";
+        });
     }
 
     $self->cleanup();
@@ -164,7 +210,7 @@ sub start_worker {
     Class::Load::load_class($klass)
         if ! Class::Load::is_class_loaded($klass);
 
-    print STDERR "Spawning $klass ($$)\n";
+    print STDERR "[     Drone] Spawning $klass ($$)\n";
 
     my ($config_key) = ($klass =~ /(Worker::[\w:]+)$/);
     my $container = $self->context->container;
@@ -173,7 +219,9 @@ sub start_worker {
     my $worker = $klass->new(
         %$config,
         cache_expires => 30,
-        container => $container
+        container => $container,
+        parent_pid => $self->pid,
+        generator  => $self->generator,
     );
     $worker->work;
 }

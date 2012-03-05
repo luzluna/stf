@@ -1,7 +1,7 @@
 package STF::Worker::Loop;
 use strict;
 use Class::Accessor::Lite
-    rw => [ qw(interval processed max_works_per_child) ]
+    rw => [ qw(interval processed status max_works_per_child) ]
 ;
 
 sub new {
@@ -9,6 +9,7 @@ sub new {
     my $self = bless {
         interval => 1_000_000,
         max_works_per_child => 1_000,
+        status => 1,
         %args,
         processed => 0,
     }, $class;
@@ -22,7 +23,7 @@ sub incr_processed {
 
 sub should_loop {
     my $self = shift;
-    return $self->{processed} < $self->max_works_per_child;
+    return $self->{status} && $self->{processed} < $self->max_works_per_child;
 }
 
 sub work {}

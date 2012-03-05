@@ -10,7 +10,7 @@ use Scalar::Util ();
 use Time::HiRes ();
 use STF::Constants qw(STF_DEBUG);
 use Class::Accessor::Lite
-    rw => [ qw(interval) ]
+    rw => [ qw(interval timeout) ]
 ;
 
 sub queue_table {
@@ -40,21 +40,21 @@ sub work {
 
     my $guard = $self->container->new_scope();
 
+    my $timeout = $impl->queue_timeout();
     my $table = $self->queue_table( $impl );
     my $waitcond = $self->queue_waitcond( $impl );
     my $dbh = $self->get('DB::Queue') or
         Carp::confess( "Could not fetch DB::Queue" );
 
-    my $loop = 1;
     my $object_id;
 
     my $sigset = POSIX::SigSet->new( SIGINT, SIGQUIT, SIGTERM );
     my $sth;
     my $cancel_q4m = POSIX::SigAction->new(sub {
-        if ( $loop ) {
+        if ( $self->status ) {
             eval { $sth->cancel };
             eval { $dbh->disconnect };
-            $loop = 0;
+            $self->status(0);
         }
     }, $sigset, &POSIX::SA_NOCLDSTOP);
     my $setsig = sub {
@@ -67,13 +67,24 @@ sub work {
     $setsig->();
 
     my $default = POSIX::SigAction->new('DEFAULT');
+    my $on_timeout = $impl->can('on_timeout');
+
     while ( $self->should_loop ) {
         $sth = $dbh->prepare(<<EOSQL);
-            SELECT args FROM $table WHERE queue_wait('$waitcond', 60)
+            SELECT args FROM $table WHERE queue_wait(?, ?)
 EOSQL
-        my $rv = $sth->execute();
+
+        my $rv = $sth->execute($waitcond, $timeout);
         if ($rv == 0) { # nothing found
             $sth->finish;
+            eval {
+                if ( $on_timeout ) {
+                    $on_timeout->( $impl );
+                }
+            };
+            if ($@) {
+                printf STDERR "[ Loop::Q4M] on_timeout callback failed: $@\n";
+            }
             next;
         }
 
@@ -111,8 +122,16 @@ EOSQL
     }
     eval { $dbh->do("SELECT queue_end()") };
 
+    eval {
+        if ( my $on_exit = $impl->can('on_exit') ) {
+            $on_exit->( $impl );
+        }
+    };
+    if ($@) {
+        printf STDERR "[ Loop::Q4M] Error while executing on_exit for $self ($$): $@\n";
+    }
     if ( STF_DEBUG ) {
-        print STDERR "Process $$ exiting...\n";
+        printf STDERR "[ Loop::Q4M] Process for $self ($$) exiting...\n";
     }
 }
 

@@ -20,6 +20,7 @@ sub get_func_id {
             delete_bucket => Q4M_FUNC_DELETE_BUCKET,
             repair_object => Q4M_FUNC_REPAIR_OBJECT,
             object_health => Q4M_FUNC_OBJECT_HEALTH,
+            reload_config => Q4M_FUNC_RELOAD_CONFIG,
         } );
     }
 

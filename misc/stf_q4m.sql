@@ -41,3 +41,10 @@ CREATE TABLE queue_object_health (
     created_at INT NOT NULL
 ) ENGINE=QUEUE;
 
+CREATE TABLE queue_reload_config (
+    args BIGINT NOT NULL,
+    num_fails INT DEFAULT 0 NOT NULL,
+    retry_at INT DEFAULT 0 NOT NULL,
+    created_at INT NOT NULL
+) ENGINE=QUEUE;
+

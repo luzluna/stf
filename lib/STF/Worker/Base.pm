@@ -3,7 +3,7 @@ use strict;
 use STF::Constants qw(STF_DEBUG);
 use Class::Load ();
 use Class::Accessor::Lite
-    rw => [ qw( loop_class interval max_works_per_child ) ]
+    rw => [ qw( loop_class interval max_works_per_child parent_pid generator queue_timeout) ]
 ;
 
 sub new {

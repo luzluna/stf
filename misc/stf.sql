@@ -82,3 +82,13 @@ CREATE TABLE entity (
        FOREIGN KEY(storage_id) REFERENCES storage(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+CREATE TABLE config (
+    varname  VARCHAR(127) PRIMARY KEY,
+    varvalue VARCHAR(127)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+CREATE TABLE worker (
+    id         CHAR(32) NOT NULL PRIMARY KEY,
+    expires_at DATETIME NOT NULL
+) ENGINE=InnoDB;
+

@@ -25,4 +25,9 @@ my %dbopts = ( RaiseError => 1, AutoCommit => 1, mysql_enable_utf8 => 1, AutoIna
         %{ $config->{'Worker::Drone'} || {} },
         spawn_interval => 0,
     },
+    map {
+        ( sprintf('Worker::%s', $_) => {
+            queue_timeout => 5,
+        } )
+    } qw(Replicate ReloadConfig)
 };
